@@ -15,6 +15,7 @@ import requests
 import argparse
 from urllib import request, error, response
 import urllib3
+import threading
 
 urllib3.disable_warnings()
 
@@ -53,6 +54,14 @@ def get_apikey()->str:
     """Gets api key from Users input if not provided"""
     print(f"{Fore.GREEN}[+] TASK: Copy and paste yoru API key")
     return getpass.getpass("\t[>] API_KEY: ")
+
+def check_subdomain(subdomain, domain):
+    url = f"https://{subdomain}.{domain}"
+    try:
+        response = requests.get(url, verify=False)
+        print(url, response.status_code)
+    except Exception as err:
+        pass
 
 class DomainFinder(object):
     """Finder object to find all subdomains for an URL"""
@@ -124,8 +133,17 @@ def main():
     print(f"{Fore.GREEN}{'-' * 50}\n[+] TASK: Finding Subdomains\n{'-' * 50 }")
     for subdomain in d.subdomains:
         print(f"{Fore.YELLOW}{subdomain}{Fore.RESET}")
+    output = "\n".join(d.subdomains)
 
-
+    
+    threads = list()
+    for sub in d.subdomains:
+        x = threading.Thread(target=check_subdomain, args=(sub.strip(), d.domain))
+        threads.append(x)
+        x.start()
+    print(f"{Fore.GREEN} {'-' * 50 }\n[+] TASK: Checking status of subdomains...\n{'-' * 50 }")
+    for thread in threads:
+        thread.join()
 
 
 if __name__ == '__main__':
