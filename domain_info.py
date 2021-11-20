@@ -4,22 +4,25 @@ VERISON: 1.0
 AUTHOR: Adam Sneed
 DESCRIPTION:
 TO-DO:
+    - Query subdomains without using API
 
 """
 import sys
 import ssl
 import random
-import getpass
+from getpass import getpass
 import colorama
 import requests
 import argparse
 from urllib import request, error, response
 import urllib3
+import logging
 import threading
+from functools import  lru_cache
 
 urllib3.disable_warnings()
 
-from requests import api
+
 
 
 try:
@@ -37,17 +40,19 @@ __version__ = "1.0"
 
 
 def display_banner():
-    colors = list(vars(colorama.Fore).values())
-    banner = ('''
+    banner = (f'''
   ____                        _           ___        __       
  |  _ \  ___  _ __ ___   __ _(_)_ __     |_ _|_ __  / _| ___  
  | | | |/ _ \| '_ ` _ \ / _` | | '_ \     | || '_ \| |_ / _ \ 
  | |_| | (_) | | | | | | (_| | | | | |    | || | | |  _| (_) |
  |____/ \___/|_| |_| |_|\__,_|_|_| |_|___|___|_| |_|_|  \___/ 
                                     |_____|                   
+Ver:{__version__}
 ''')
-    return f"{random.choice(colors)}{banner}{Fore.RESET}"
+    return f"{Fore.YELLOW}{banner}{Fore.RESET}"
 
+
+logging.basicConfig(filename='app.log', filemode='a', format='%(asctime)s - %(levelname)s - %(message)s', datefmt='%y%b%d %H:%M:%S')
 
 
 def get_apikey()->str:
@@ -55,13 +60,21 @@ def get_apikey()->str:
     print(f"{Fore.GREEN}[+] TASK: Copy and paste yoru API key")
     return getpass.getpass("\t[>] API_KEY: ")
 
-def check_subdomain(subdomain, domain):
+def check_subdomain(subdomain, domain) -> None:
     url = f"https://{subdomain}.{domain}"
     try:
         response = requests.get(url, verify=False)
         print(url, response.status_code)
     except Exception as err:
-        pass
+        logging.error(err)
+        
+def write_to_file(domain, output_file):
+    '''Write found subdomains to file.'''
+    try:
+        with open(output_file, 'a') as f:
+            f.write(f"{domain}\n")
+    except Exception as err:
+        logging.error(err)
 
 class DomainFinder(object):
     """Finder object to find all subdomains for an URL"""
@@ -77,12 +90,12 @@ class DomainFinder(object):
         self.dns = []
 
     def test_connection(self):
-        """Test Connection API before Querying"""
+        """Test Connection API before Query"""
         try :
             with request.urlopen(self.url) as status_code:
                 successful_connect = status_code.getcode() == 200
                 if successful_connect is True:
-                    return f"{Fore.GREEN}[+] TASK: API is online! Proceeding..."
+                    return f"{Fore.GREEN}[+] TASK: API is online!"
                 print(f"{Fore.RED}[-] ERROR (HTML:{status_code.getcode()}): Unable to access API. ")
                 sys.exit(1)
         except error.HTTPError as httperr:
@@ -92,23 +105,26 @@ class DomainFinder(object):
         except error.URLError:
             print(f"{Fore.RED}[-] ERROR (WIN: 10061): Target actively refused connection.")
             sys.exit(1)
-
+    @lru_cache(maxsize=400)
     def get_info(self):
         url = f"{self.url}v1/domain/{self.domain}"
         response = requests.request("GET", url, headers=self.headers, verify=False)
         self.info = response.json()
         
+    @lru_cache(maxsize=400)    
     def get_dns_history(self):
         url = f"{self.url}history/{self.domain}/dns/a"
         response = requests.request("GET", url, headers=self.headers, verify=False)
         self.dns = response.json()
-
+        
+    @lru_cache(maxsize=400)
     def get_subdomains(self):
         url = f"{self.url}domain/{self.domain}/subdomains"
         response = requests.request("GET", url, headers=self.headers, verify=False)
         subdomains = response.json()["subdomains"]
         self.subdomains = subdomains
-
+        
+    @lru_cache(maxsize=400)
     def get_associated_domains(self):
         """Get associated domains. This function requires a full subscription"""
         url = f"{self.url}domain/{self.domain}/associated"
@@ -118,9 +134,11 @@ class DomainFinder(object):
 
 def main():
     print(display_banner())
-    parser = argparse.ArgumentParser(prog="domain_info", usage="%(prog)s [options]", description=f"Queiries information on a given domain")
+    parser = argparse.ArgumentParser(prog="domain_info", usage="%(prog)s [options]", description=f"Query information on a given domain")
     parser.add_argument('-a', '--apikey', help="Enter API Key")
     parser.add_argument('-d', '--domain', help="Domain to query", required=True)
+    parser.add_argument('-o','--out', help="File to write output")
+    parser.add_argument('-c', '--check', help='Check if found subdomains can be reached', action='store_true')
     args = parser.parse_args()
     if not args.apikey:
         apikey = get_apikey()
@@ -132,18 +150,21 @@ def main():
     d.get_subdomains()
     print(f"{Fore.GREEN}{'-' * 50}\n[+] TASK: Finding Subdomains\n{'-' * 50 }")
     for subdomain in d.subdomains:
-        print(f"{Fore.YELLOW}{subdomain}{Fore.RESET}")
-    output = "\n".join(d.subdomains)
+        sys.stdout.write(f"{Fore.YELLOW}{subdomain}.{d.domain}{Fore.RESET}\n")
+    subdomains_list = [f"{subdomain}.{d.domain}" for subdomain in d.subdomains]
+    output = "\n".join(subdomains_list)
+    if args.out:
+        write_to_file(output, args.out)
 
-    
-    threads = list()
-    for sub in d.subdomains:
-        x = threading.Thread(target=check_subdomain, args=(sub.strip(), d.domain))
-        threads.append(x)
-        x.start()
-    print(f"{Fore.GREEN} {'-' * 50 }\n[+] TASK: Checking status of subdomains...\n{'-' * 50 }")
-    for thread in threads:
-        thread.join()
+    if args.check:
+        threads = list()
+        for sub in d.subdomains:
+            x = threading.Thread(target=check_subdomain, args=(sub.strip(), d.domain))
+            threads.append(x)
+            x.start()
+        print(f"{Fore.GREEN} {'-' * 50 }\n[+] TASK: Checking status of subdomains...\n{'-' * 50 }")
+        for thread in threads:
+            thread.join()
 
 
 if __name__ == '__main__':
